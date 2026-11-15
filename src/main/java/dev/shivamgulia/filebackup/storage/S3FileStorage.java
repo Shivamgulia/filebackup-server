@@ -21,8 +21,9 @@ import java.time.Duration;
 import java.util.HexFormat;
 
 /**
- * S3 blob store (aws profile). Same content-addressed contract as {@link LocalFileStorage}:
- * hash while streaming to a temp file (S3 needs a known length), then upload keyed by sha256 hex.
+ * S3 store (aws profile). Each file is an object keyed by its backup path — same one-copy,
+ * real-names contract as {@link LocalFileStorage}: hash while streaming to a temp file
+ * (S3 needs a known length), then upload to the path key.
  */
 @Component
 @Profile("aws")
@@ -37,7 +38,7 @@ public class S3FileStorage implements FileStorage {
     }
 
     @Override
-    public String store(InputStream in) {
+    public String store(String path, InputStream in) {
         try {
             Files.createDirectories(Path.of(System.getProperty("java.io.tmpdir")));
             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
@@ -46,35 +47,32 @@ public class S3FileStorage implements FileStorage {
                 Files.copy(new DigestInputStream(in, sha256), temp);
             }
             try {
-                String key = HexFormat.of().formatHex(sha256.digest());
-                if (!exists(key)) { // dedup: identical content already stored
-                    s3.putObject(b -> b.bucket(bucket).key(key), RequestBody.fromFile(temp));
-                }
-                return key;
+                s3.putObject(b -> b.bucket(bucket).key(path), RequestBody.fromFile(temp));
+                return HexFormat.of().formatHex(sha256.digest());
             } finally {
                 Files.delete(temp);
             }
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         } catch (IOException e) {
-            throw new UncheckedIOException("Blob store failure", e);
+            throw new UncheckedIOException("File store failure: " + path, e);
         }
     }
 
     @Override
-    public InputStream read(String blobKey) {
-        return s3.getObject(b -> b.bucket(bucket).key(blobKey));
+    public InputStream read(String path) {
+        return s3.getObject(b -> b.bucket(bucket).key(path));
     }
 
     @Override
-    public void delete(String blobKey) {
-        s3.deleteObject(b -> b.bucket(bucket).key(blobKey));
+    public void delete(String path) {
+        s3.deleteObject(b -> b.bucket(bucket).key(path));
     }
 
     @Override
-    public boolean exists(String blobKey) {
+    public boolean exists(String path) {
         try {
-            s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(blobKey).build());
+            s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(path).build());
             return true;
         } catch (NoSuchKeyException e) {
             return false;
@@ -82,15 +80,15 @@ public class S3FileStorage implements FileStorage {
     }
 
     @Override
-    public long size(String blobKey) {
-        return s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(blobKey).build()).contentLength();
+    public long size(String path) {
+        return s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(path).build()).contentLength();
     }
 
     @Override
-    public String presignUpload(String blobKey) {
+    public String presignUpload(String path) {
         var presign = S3Presigner.create().presignPutObject(b -> b
                 .signatureDuration(Duration.ofMinutes(15))
-                .putObjectRequest(p -> p.bucket(bucket).key(blobKey)));
+                .putObjectRequest(p -> p.bucket(bucket).key(path)));
         return presign.url().toString();
     }
 }

@@ -5,82 +5,84 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LocalFileStorageTest {
 
     @TempDir
     Path dir;
 
-    @Test
-    void storesContentAddressedAndDedups() throws Exception {
-        var storage = new LocalFileStorage(dir.toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
-        byte[] content = "same bytes".getBytes();
-        String expectedKey = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+    private LocalFileStorage storage() {
+        return new LocalFileStorage(dir.resolve("files").toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
+    }
 
-        String key1 = storage.store(new ByteArrayInputStream(content));
-        String key2 = storage.store(new ByteArrayInputStream(content));
-
-        assertThat(key1).isEqualTo(expectedKey);
-        assertThat(key2).isEqualTo(key1);              // identical content → identical key
-        try (var files = Files.list(dir)) {            // one blob, no leftover temp files
-            assertThat(files.filter(p -> !p.getFileName().toString().startsWith("upload-"))).hasSize(1);
-        }
-        assertThat(new String(storage.read(key1).readAllBytes())).isEqualTo("same bytes");
+    private String sha256Of(byte[] content) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
     }
 
     @Test
-    void exposesBlobAsRealFileUnderByPathView() throws Exception {
-        var storage = new LocalFileStorage(dir.resolve("blobs").toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
-        String key = storage.store(new ByteArrayInputStream("photo-bytes".getBytes()));
+    void storesTheFileAtItsBackupPathAndReturnsSha256() throws Exception {
+        var storage = storage();
+        byte[] content = "photo-bytes".getBytes();
 
-        storage.exposeAs(key, "testuser/photos/2026/11/12/IMG_2616.HEIC");
+        String sha = storage.store("testuser/photos/IMG_2616.HEIC", new ByteArrayInputStream(content));
 
-        Path byPath = dir.resolve("blobs").resolveSibling("files")
-                .resolve("testuser/photos/2026/11/12/IMG_2616.HEIC");
-        assertThat(byPath).exists();                                   // real name, browsable
-        assertThat(new String(Files.readAllBytes(byPath))).isEqualTo("photo-bytes");
-        assertThat(Files.getLastModifiedTime(byPath)).isEqualTo(Files.getLastModifiedTime(dir.resolve("blobs").resolve(key)));
+        assertThat(sha).isEqualTo(sha256Of(content));
+        Path file = dir.resolve("files").resolve("testuser/photos/IMG_2616.HEIC");
+        assertThat(file).exists();                                  // real name, browsable
+        assertThat(new String(Files.readAllBytes(file))).isEqualTo("photo-bytes");
     }
 
     @Test
-    void exposesLatestVersionAtSameByPath() throws Exception {
-        var storage = new LocalFileStorage(dir.resolve("blobs").toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
-        String v1 = storage.store(new ByteArrayInputStream("version-1".getBytes()));
-        String v2 = storage.store(new ByteArrayInputStream("version-2".getBytes()));
+    void overwriteReplacesTheBytesInPlace() throws Exception {
+        var storage = storage();
 
-        storage.exposeAs(v1, "testuser/photos/doc.txt");
-        storage.exposeAs(v2, "testuser/photos/doc.txt");
+        storage.store("testuser/photos/doc.txt", new ByteArrayInputStream("version-1".getBytes()));
+        String sha2 = storage.store("testuser/photos/doc.txt", new ByteArrayInputStream("version-2".getBytes()));
 
-        Path byPath = dir.resolve("blobs").resolveSibling("files").resolve("testuser/photos/doc.txt");
-        assertThat(new String(Files.readAllBytes(byPath))).isEqualTo("version-2");   // latest wins
+        assertThat(sha2).isEqualTo(sha256Of("version-2".getBytes()));
+        assertThat(new String(Files.readAllBytes(dir.resolve("files").resolve("testuser/photos/doc.txt"))))
+                .isEqualTo("version-2");                            // latest wins, one copy
     }
 
     @Test
-    void unexposeRemovesTheByPathLink() throws Exception {
-        var storage = new LocalFileStorage(dir.resolve("blobs").toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
-        String key = storage.store(new ByteArrayInputStream("gone-soon".getBytes()));
-        storage.exposeAs(key, "testuser/photos/x.txt");
+    void readSizeExistsDeleteOperateOnThePath() throws Exception {
+        var storage = storage();
+        String path = "testuser/photos/x.txt";
+        storage.store(path, new ByteArrayInputStream("gone-soon".getBytes()));
 
-        storage.unexpose("testuser/photos/x.txt");
-        storage.unexpose("testuser/photos/never-there.txt"); // idempotent
+        assertThat(storage.exists(path)).isTrue();
+        assertThat(storage.size(path)).isEqualTo(9);
+        assertThat(new String(storage.read(path).readAllBytes())).isEqualTo("gone-soon");
 
-        assertThat(dir.resolve("files").resolve("testuser/photos/x.txt")).doesNotExist();
-        assertThat(dir.resolve("blobs").resolve(key)).exists(); // blob kept (soft delete)
+        storage.delete(path);
+        storage.delete("testuser/photos/never-there.txt");          // idempotent
+
+        assertThat(storage.exists(path)).isFalse();
     }
 
     @Test
-    void exposesRejectsTraversal() throws Exception {
-        var storage = new LocalFileStorage(dir.resolve("blobs").toString(), new BlobUrlSigner("test-secret-0123456789abcdef0123456789abcdef"));
-        String key = storage.store(new ByteArrayInputStream("x".getBytes()));
+    void storeRejectsTraversal() {
+        var storage = storage();
 
-        storage.exposeAs(key, "testuser/../escape.txt");  // best-effort: no exception, nothing written outside
-
+        assertThatThrownBy(() -> storage.store("testuser/../escape.txt", new ByteArrayInputStream("x".getBytes())))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThat(dir.resolve("escape.txt")).doesNotExist();
+    }
+
+    @Test
+    void presignsAnUploadUrlForThePath() {
+        var storage = storage();
+
+        String url = storage.presignUpload("testuser/photos/IMG_2616.HEIC");
+
+        assertThat(url).contains("key=testuser%2Fphotos%2FIMG_2616.HEIC").contains("signature=");
     }
 }

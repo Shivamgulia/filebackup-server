@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.ResourceAccessException;
 
+import java.net.URI;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Map;
@@ -35,7 +36,7 @@ class FileBackupPresignTest {
         HttpHeaders auth = bearer();
         // unique content per run: ./data/blobs survives between runs even when the test DB doesn't,
         // so a fixed hash would dedup-commit on the first initiate instead of presigning
-        String path = "tester/presign/report.pdf";
+        String path = "tester/presign/report-" + UUID.randomUUID() + ".pdf";
         byte[] content = ("presigned content " + UUID.randomUUID()).getBytes();
         String sha256 = sha256Of(content);
 
@@ -50,7 +51,7 @@ class FileBackupPresignTest {
         // PUT bytes to the signed URL (no JWT — the signature is the auth)
         HttpHeaders putHeaders = new HttpHeaders();
         putHeaders.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-        assertThat(rest.exchange(uploadUrl, HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource(content), putHeaders), Void.class)
+        assertThat(rest.exchange(URI.create(uploadUrl), HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource(content), putHeaders), Void.class)
                 .getStatusCode().value()).isEqualTo(204);
 
         // complete → version committed
@@ -73,7 +74,7 @@ class FileBackupPresignTest {
     @Test
     void wrongContentUnderClaimedHashIsRejected() throws Exception {
         HttpHeaders auth = bearer();
-        String path = "tester/presign/lie.pdf";
+        String path = "tester/presign/lie-" + UUID.randomUUID() + ".pdf";
         String claimed = sha256Of("honest".getBytes());
         byte[] dishonest = ("dishonest " + UUID.randomUUID()).getBytes();
 
@@ -82,7 +83,7 @@ class FileBackupPresignTest {
 
         HttpHeaders putHeaders = new HttpHeaders();
         putHeaders.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-        rest.exchange(url, HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource(dishonest), putHeaders), Void.class);
+        rest.exchange(URI.create(url), HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource(dishonest), putHeaders), Void.class);
 
         // the claimed key does not exist (bytes stored under their true hash) → 409
         assertThat(post(auth, "/api/uploads/complete",
@@ -94,7 +95,7 @@ class FileBackupPresignTest {
         HttpHeaders auth = bearer();
         String sha256 = sha256Of(("never-uploaded " + UUID.randomUUID()).getBytes());
         assertThat(post(auth, "/api/uploads/complete",
-                Map.of("path", "tester/presign/ghost.pdf", "sha256", sha256, "sizeBytes", 13)).getStatusCode().value()).isEqualTo(409);
+                Map.of("path", "tester/presign/ghost-" + UUID.randomUUID() + ".pdf", "sha256", sha256, "sizeBytes", 13)).getStatusCode().value()).isEqualTo(409);
     }
 
     @Test
@@ -102,11 +103,11 @@ class FileBackupPresignTest {
         HttpHeaders auth = bearer();
         String sha256 = sha256Of(("sig-test " + UUID.randomUUID()).getBytes());
         String url = (String) post(auth, "/api/uploads",
-                Map.of("path", "tester/presign/sig.pdf", "sha256", sha256, "sizeBytes", 40)).getBody().get("uploadUrl");
+                Map.of("path", "tester/presign/sig-" + UUID.randomUUID() + ".pdf", "sha256", sha256, "sizeBytes", 40)).getBody().get("uploadUrl");
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-        assertThat(rest.exchange(url + "tampered", HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource("x".getBytes()), headers), Void.class)
+        assertThat(rest.exchange(URI.create(url + "tampered"), HttpMethod.PUT, new HttpEntity<>(new ByteArrayResource("x".getBytes()), headers), Void.class)
                 .getStatusCode().value()).isEqualTo(401);
     }
 

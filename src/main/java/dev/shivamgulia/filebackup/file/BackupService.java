@@ -12,26 +12,31 @@ import org.springframework.stereotype.Service;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 
 /**
  * Orchestrates the backup flows. Talks only to the {@link FileStorage} and {@link MetadataStore} ports.
- * Path convention: {@code <username>/rest/of/path} — {@code createdBy} is the first segment.
- * The auth step will enforce that the JWT user matches it; for now it is derived, not checked.
+ * Path convention: {@code <username>/photos/<filename>} — the file IS the storage (no blob layer).
+ * Bytes exist only for the latest version; version rows keep sha/size history.
  */
 @Service
 public class BackupService {
 
-    private final FileStorage blobs;
+    private final FileStorage storage;
     private final MetadataStore metadata;
     private final int keepVersions;
     private final String adminUser;
 
-    public BackupService(FileStorage blobs, MetadataStore metadata,
+    public BackupService(FileStorage storage, MetadataStore metadata,
                          @Value("${filebackup.keep-versions:10}") int keepVersions,
                          @Value("${filebackup.admin-user}") String adminUser) {
-        this.blobs = blobs;
+        this.storage = storage;
         this.metadata = metadata;
         this.keepVersions = keepVersions;
         this.adminUser = adminUser;
@@ -41,23 +46,24 @@ public class BackupService {
         requirePath(path);
         requireOwner(path, username);
         CountingInputStream counting = new CountingInputStream(body);
-        String blobKey = blobs.store(counting); // also the sha256 hex of the content
-        VersionRecord saved = metadata.saveVersion(path, ownerOf(path), blobKey, blobKey, counting.count);
-        blobs.exposeAs(blobKey, path);
-        metadata.versionsToPrune(path, keepVersions).forEach(metadata::deleteVersion);
-        return saved;
+        String sha256 = storage.store(path, counting); // also the sha256 hex of the content
+        return commit(path, sha256, counting.count);
     }
 
-    /** Opens the blob for {@code path} at {@code version} (latest when null). Caller must stream + checksum-verify. */
+    /** Opens {@code path} at {@code version} (latest when null). Caller must stream + checksum-verify. */
     public Download download(String path, Long version, String username) {
         requirePath(path);
         requireOwner(path, username);
         VersionRecord record = (version == null ? metadata.latestVersion(path) : metadata.version(path, version))
                 .orElseThrow(() -> new NotFoundException("No version " + (version == null ? "latest" : version) + " for path: " + path));
-        return new Download(record, blobs.read(record.blobKey()));
+        if (version != null && metadata.latestVersion(path).map(v -> v.version()).filter(v -> v.equals(version)).isEmpty()) {
+            // only the latest bytes exist on disk; older version rows are history only
+            throw new NotFoundException("Only the latest version's bytes are stored: " + path);
+        }
+        return new Download(record, storage.read(path));
     }
 
-    /** Latest-version metadata without opening the blob (cheap check for clients, used by HEAD + client script). */
+    /** Latest-version metadata without opening the file (cheap check for clients, used by HEAD + client script). */
     public VersionRecord latest(String path, String username) {
         requirePath(path);
         requireOwner(path, username);
@@ -74,7 +80,7 @@ public class BackupService {
         requirePath(path);
         requireOwner(path, username);
         metadata.tombstone(path);
-        blobs.unexpose(path); // remove the browsable by-path link; blobs and history stay
+        storage.delete(path); // the file IS the store; history rows stay in the DB
     }
 
     /** Non-admins are pinned to their own username prefix; anything outside it looks empty (no leaking). */
@@ -102,8 +108,9 @@ public class BackupService {
     }
 
     /**
-     * Dedup → commit immediately; otherwise hand back a signed upload URL.
-     * The client's sha256 is only trusted for presigning — `complete` verifies against actual storage.
+     * Same-path dedup → commit immediately; a differently-contented existing file is a conflict;
+     * otherwise hand back a signed upload URL. The client's sha256 is trusted for the dedup check —
+     * `complete` verifies the size against actual storage.
      */
     public Initiated initiate(String path, String username, String sha256, long sizeBytes) {
         requirePath(path);
@@ -112,29 +119,57 @@ public class BackupService {
         if (sizeBytes < 0) {
             throw new IllegalArgumentException("Invalid size");
         }
-        if (blobs.exists(sha256)) {
-            VersionRecord saved = metadata.saveVersion(path, ownerOf(path), sha256, sha256, sizeBytes);
-            blobs.exposeAs(sha256, path);
-            metadata.versionsToPrune(path, keepVersions).forEach(metadata::deleteVersion);
+        if (storage.exists(path)) {
+            VersionRecord current = metadata.latestVersion(path)
+                    .orElseThrow(() -> new UploadConflictException("File exists without a version row: " + path));
+            if (!sha256.equals(current.sha256())) {
+                throw new UploadConflictException("A different file already exists at " + path);
+            }
+            if (storage.size(path) != sizeBytes) {
+                throw new UploadConflictException("Stored size mismatch for " + path + ": claimed " + sizeBytes);
+            }
+            VersionRecord saved = commit(path, sha256, sizeBytes);
             return new Initiated("committed", null, null, saved.version());
         }
-        return new Initiated("presigned", blobs.presignUpload(sha256), "PUT", null);
+        return new Initiated("presigned", storage.presignUpload(path), "PUT", null);
     }
 
-    /** Verifies the blob really landed under the claimed hash, then commits the version row. */
+    /** Verifies the uploaded file's sha256 + size, then commits the version row. */
     public VersionRecord complete(String path, String username, String sha256, long sizeBytes) {
         requirePath(path);
         requireOwner(path, username);
         requireSha256(sha256);
-        if (!blobs.exists(sha256)) {
-            throw new UploadConflictException("No uploaded blob under key " + sha256);
+        if (!storage.exists(path)) {
+            throw new UploadConflictException("No uploaded file for " + path);
         }
-        long actual = blobs.size(sha256);
+        long actual = storage.size(path);
         if (actual != sizeBytes) {
-            throw new UploadConflictException("Size mismatch for blob " + sha256 + ": claimed " + sizeBytes + ", stored " + actual);
+            throw new UploadConflictException("Size mismatch for " + path + ": claimed " + sizeBytes + ", stored " + actual);
         }
-        VersionRecord saved = metadata.saveVersion(path, ownerOf(path), sha256, sha256, actual);
-        blobs.exposeAs(sha256, path);
+        if (!sha256.equals(hashOf(path))) {
+            throw new UploadConflictException("Checksum mismatch for " + path + ": stored bytes are not sha256 " + sha256);
+        }
+        return commit(path, sha256, actual);
+    }
+
+    /** Streams the stored file once to compute its sha256 — the presigned flow's integrity check. */
+    private String hashOf(String path) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new DigestInputStream(storage.read(path), digest)) {
+                in.transferTo(OutputStream.nullOutputStream());
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not hash " + path, e);
+        }
+    }
+
+    private VersionRecord commit(String path, String sha256, long sizeBytes) {
+        VersionRecord saved = metadata.saveVersion(path, ownerOf(path), sha256, sha256, sizeBytes);
         metadata.versionsToPrune(path, keepVersions).forEach(metadata::deleteVersion);
         return saved;
     }

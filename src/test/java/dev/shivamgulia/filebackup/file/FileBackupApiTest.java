@@ -41,7 +41,7 @@ class FileBackupApiTest {
         assertThat(up.getStatusCode().value()).isEqualTo(201);
         assertThat(up.getBody()).containsEntry("version", 1);
 
-        // re-upload same bytes → new version row (content dedup keeps one blob)
+        // re-upload same bytes → new version row (bytes are overwritten in place, one copy)
         assertThat(put(auth, path, content).getBody()).containsEntry("version", 2);
 
         // download latest → exact bytes back
@@ -49,8 +49,8 @@ class FileBackupApiTest {
         assertThat(down.getStatusCode().value()).isEqualTo(200);
         assertThat(down.getBody()).isEqualTo(content);
 
-        // download a specific version
-        assertThat(get(auth, "/api/files/" + path + "?version=1", byte[].class).getBody()).isEqualTo(content);
+        // download a specific version → 404: only the latest version's bytes are stored
+        assertThat(get(auth, "/api/files/" + path + "?version=1", byte[].class).getStatusCode().value()).isEqualTo(404);
 
         // list shows one active file with 2 versions
         ResponseEntity<Map[]> list = get(auth, "/api/files?prefix=tester/api-test/", Map[].class);

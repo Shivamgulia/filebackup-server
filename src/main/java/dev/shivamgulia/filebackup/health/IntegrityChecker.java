@@ -13,18 +13,18 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 /**
- * Verifies the latest version's blob of every non-deleted file against its stored sha256.
+ * Verifies the latest version's file of every non-deleted path against its stored sha256.
  * Personal scale = fine to do synchronously on /api/health.
  */
 @Component
 public class IntegrityChecker {
 
     private final MetadataStore metadata;
-    private final FileStorage blobs;
+    private final FileStorage storage;
 
-    public IntegrityChecker(MetadataStore metadata, FileStorage blobs) {
+    public IntegrityChecker(MetadataStore metadata, FileStorage storage) {
         this.metadata = metadata;
-        this.blobs = blobs;
+        this.storage = storage;
     }
 
     record CorruptFile(String path, long version) {
@@ -50,7 +50,7 @@ public class IntegrityChecker {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
-        try (InputStream in = new DigestInputStream(blobs.read(record.blobKey()), sha256)) {
+        try (InputStream in = new DigestInputStream(storage.read(record.path()), sha256)) {
             in.transferTo(OutputStream.nullOutputStream());
         } catch (Exception e) {
             return false; // unreadable = corrupt for reporting purposes

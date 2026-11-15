@@ -3,5 +3,9 @@ spring:
     name: filebackup
   profiles:
     active: dev
+  mvc:
+    formcontent:
+      filter:
+        enabled: false   # would consume form-encoded PUT bodies, emptying the presigned upload stream
   jpa:
     open-in-view: false
