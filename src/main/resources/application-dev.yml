@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/filebackup
+    username: postgres
+    password: mysecretpassword
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+filebackup:
+  blobs-dir: ./data/blobs
+  keep-versions: 10
+  jwt-secret: dev-secret-0123456789abcdef0123456789abcdef
+  admin-user: shivam
+  users:
+    - username: shivam
+      password: changeme
+    - username: testuser
+      password: testpass

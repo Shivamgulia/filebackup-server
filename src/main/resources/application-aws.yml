@@ -1,0 +1,20 @@
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceInitializationAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.JdbcClientAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+filebackup:
+  aws:
+    bucket: ${FILEBACKUP_BUCKET}
+    table: ${FILEBACKUP_TABLE:filebackup-metadata}
+  keep-versions: 10
+  jwt-secret: ${FILEBACKUP_JWT_SECRET}
+  admin-user: ${FILEBACKUP_ADMIN_USER}
+  users:
+    - username: ${FILEBACKUP_ADMIN_USER}
+      password: ${FILEBACKUP_ADMIN_PASSWORD}
