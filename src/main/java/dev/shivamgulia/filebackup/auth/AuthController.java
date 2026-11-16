@@ -1,9 +1,11 @@
 package dev.shivamgulia.filebackup.auth;
 
 import dev.shivamgulia.filebackup.user.UserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,6 +22,9 @@ public class AuthController {
     public record LoginResponse(String token) {
     }
 
+    public record MeResponse(String username, boolean admin) {
+    }
+
     public record LoginRejected(int status, String message) {
     }
 
@@ -28,11 +33,14 @@ public class AuthController {
 
     private final UserRepository users;
     private final JwtService jwt;
+    private final String adminUser;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public AuthController(UserRepository users, JwtService jwt) {
+    public AuthController(UserRepository users, JwtService jwt,
+                          @Value("${filebackup.admin-user}") String adminUser) {
         this.users = users;
         this.jwt = jwt;
+        this.adminUser = adminUser;
     }
 
     @PostMapping("/api/auth/login")
@@ -50,6 +58,12 @@ public class AuthController {
                     return ResponseEntity.ok((Object) new LoginResponse(jwt.issue(u.getUsername())));
                 })
                 .orElseGet(this::unauthorized);
+    }
+
+    /** Who the token belongs to and whether it is the admin — the app's role source of truth. */
+    @GetMapping("/api/auth/me")
+    MeResponse me(java.security.Principal principal) {
+        return new MeResponse(principal.getName(), principal.getName().equals(adminUser));
     }
 
     private ResponseEntity<Object> unauthorized() {
