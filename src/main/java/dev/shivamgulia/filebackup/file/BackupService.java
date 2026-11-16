@@ -1,6 +1,7 @@
 package dev.shivamgulia.filebackup.file;
 
 import dev.shivamgulia.filebackup.config.NotFoundException;
+import dev.shivamgulia.filebackup.auth.AuthProperties;
 import dev.shivamgulia.filebackup.config.UploadConflictException;
 import dev.shivamgulia.filebackup.metadata.FileSummary;
 import dev.shivamgulia.filebackup.metadata.MetadataStore;
@@ -31,15 +32,15 @@ public class BackupService {
     private final FileStorage storage;
     private final MetadataStore metadata;
     private final int keepVersions;
-    private final String adminUser;
+    private final AuthProperties auth;
 
     public BackupService(FileStorage storage, MetadataStore metadata,
                          @Value("${filebackup.keep-versions:10}") int keepVersions,
-                         @Value("${filebackup.admin-user}") String adminUser) {
+                         AuthProperties auth) {
         this.storage = storage;
         this.metadata = metadata;
         this.keepVersions = keepVersions;
-        this.adminUser = adminUser;
+        this.auth = auth;
     }
 
     public VersionRecord upload(String path, String username, InputStream body) {
@@ -85,7 +86,7 @@ public class BackupService {
 
     /** Non-admins are pinned to their own username prefix; anything outside it looks empty (no leaking). */
     private String effectivePrefix(String prefix, String username) {
-        if (username.equals(adminUser)) {
+        if (auth.isAdmin(username)) {
             return (prefix == null || prefix.isBlank()) ? "" : prefix;
         }
         String own = username + "/";
@@ -97,7 +98,7 @@ public class BackupService {
 
     /** Cross-user access is a 404, not a 403 — don't confirm other users' paths exist. Admin bypasses. */
     private void requireOwner(String path, String username) {
-        if (!username.equals(ownerOf(path)) && !username.equals(adminUser)) {
+        if (!username.equals(ownerOf(path)) && !auth.isAdmin(username)) {
             throw new NotFoundException("No backup for path: " + path);
         }
     }

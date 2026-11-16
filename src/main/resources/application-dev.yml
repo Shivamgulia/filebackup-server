@@ -11,7 +11,7 @@ filebackup:
   files-dir: ./data/files
   keep-versions: 10
   jwt-secret: dev-secret-0123456789abcdef0123456789abcdef
-  admin-user: shivam
+  admin-user: shivam,testuser
   users:
     - username: shivam
       password: changeme

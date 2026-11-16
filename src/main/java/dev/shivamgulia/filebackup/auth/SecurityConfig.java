@@ -31,7 +31,7 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwt, AuthProperties properties,
                                             UserRepository users) throws Exception {
-        var jwtFilter = new JwtAuthFilter(jwt, properties.adminUser(), users);
+        var jwtFilter = new JwtAuthFilter(jwt, properties, users);
         http.csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth

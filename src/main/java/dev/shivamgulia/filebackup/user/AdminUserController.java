@@ -1,7 +1,7 @@
 package dev.shivamgulia.filebackup.user;
 
+import dev.shivamgulia.filebackup.auth.AuthProperties;
 import dev.shivamgulia.filebackup.config.NotFoundException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -45,12 +45,12 @@ public class AdminUserController {
     }
 
     private final UserRepository users;
-    private final String adminUser;
+    private final AuthProperties properties;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public AdminUserController(UserRepository users, @Value("${filebackup.admin-user}") String adminUser) {
+    public AdminUserController(UserRepository users, AuthProperties properties) {
         this.users = users;
-        this.adminUser = adminUser;
+        this.properties = properties;
     }
 
     @GetMapping("/api/admin/users")
@@ -83,8 +83,8 @@ public class AdminUserController {
 
     @PutMapping("/api/admin/users/{username}/suspension")
     ResponseEntity<Void> suspend(@PathVariable String username, @RequestBody SuspensionRequest request) {
-        if (username.equals(adminUser)) {
-            throw new IllegalArgumentException("The admin account cannot be suspended");
+        if (properties.isAdmin(username)) {
+            throw new IllegalArgumentException("Admin accounts cannot be suspended");
         }
         UserEntity user = users.findByUsername(username)
                 .orElseThrow(() -> new NotFoundException("No user: " + username));

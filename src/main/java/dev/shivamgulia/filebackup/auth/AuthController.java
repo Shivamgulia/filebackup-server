@@ -1,7 +1,7 @@
 package dev.shivamgulia.filebackup.auth;
 
+import dev.shivamgulia.filebackup.auth.AuthProperties;
 import dev.shivamgulia.filebackup.user.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -33,14 +33,13 @@ public class AuthController {
 
     private final UserRepository users;
     private final JwtService jwt;
-    private final String adminUser;
+    private final AuthProperties properties;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public AuthController(UserRepository users, JwtService jwt,
-                          @Value("${filebackup.admin-user}") String adminUser) {
+    public AuthController(UserRepository users, JwtService jwt, AuthProperties properties) {
         this.users = users;
         this.jwt = jwt;
-        this.adminUser = adminUser;
+        this.properties = properties;
     }
 
     @PostMapping("/api/auth/login")
@@ -63,7 +62,7 @@ public class AuthController {
     /** Who the token belongs to and whether it is the admin — the app's role source of truth. */
     @GetMapping("/api/auth/me")
     MeResponse me(java.security.Principal principal) {
-        return new MeResponse(principal.getName(), principal.getName().equals(adminUser));
+        return new MeResponse(principal.getName(), properties.isAdmin(principal.getName()));
     }
 
     private ResponseEntity<Object> unauthorized() {
