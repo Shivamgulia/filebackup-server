@@ -45,7 +45,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                             .filter(u -> !u.isSuspended())
                             .ifPresent(u -> {
                                 var authorities = List.of(new SimpleGrantedAuthority(
-                                        properties.isAdmin(username) ? ROLE_ADMIN : "ROLE_USER"));
+                                        properties.isAdmin(username) || "admin".equals(u.getRole())
+                                                ? ROLE_ADMIN : "ROLE_USER"));
                                 var authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
                                 SecurityContextHolder.getContext().setAuthentication(authentication);
                             }));

@@ -62,7 +62,10 @@ public class AuthController {
     /** Who the token belongs to and whether it is the admin — the app's role source of truth. */
     @GetMapping("/api/auth/me")
     MeResponse me(java.security.Principal principal) {
-        return new MeResponse(principal.getName(), properties.isAdmin(principal.getName()));
+        boolean admin = users.findByUsername(principal.getName())
+                .map(u -> properties.isAdmin(u.getUsername()) || "admin".equals(u.getRole()))
+                .orElse(false);
+        return new MeResponse(principal.getName(), admin);
     }
 
     private ResponseEntity<Object> unauthorized() {

@@ -38,12 +38,21 @@ public class UserEntity {
     @Column(nullable = false)
     private boolean suspended = false;
 
+    /** "user" or "admin" — configurable admins (filebackup.admin-user) are always admin too. */
+    @Column(nullable = false)
+    private String role = "user";
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
     public UserEntity(String username, String passwordHash) {
+        this(username, passwordHash, "user");
+    }
+
+    public UserEntity(String username, String passwordHash, String role) {
         this.username = username;
         this.passwordHash = passwordHash;
+        this.role = role;
         this.createdAt = Instant.now();
     }
 }

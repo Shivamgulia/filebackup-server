@@ -31,7 +31,10 @@ public class AdminUserController {
     public record SuspensionRequest(boolean suspended) {
     }
 
-    public record UserView(String username, boolean suspended, java.time.Instant createdAt) {
+    public record RoleRequest(String role) {
+    }
+
+    public record UserView(String username, String role, boolean suspended, java.time.Instant createdAt) {
     }
 
     public record CreatedResponse(String username) {
@@ -56,7 +59,7 @@ public class AdminUserController {
     @GetMapping("/api/admin/users")
     List<UserView> list() {
         return users.findAll().stream()
-                .map(u -> new UserView(u.getUsername(), u.isSuspended(), u.getCreatedAt()))
+                .map(u -> new UserView(u.getUsername(), u.getRole(), u.isSuspended(), u.getCreatedAt()))
                 .toList();
     }
 
@@ -83,12 +86,28 @@ public class AdminUserController {
 
     @PutMapping("/api/admin/users/{username}/suspension")
     ResponseEntity<Void> suspend(@PathVariable String username, @RequestBody SuspensionRequest request) {
+        UserEntity user = users.findByUsername(username)
+                .orElseThrow(() -> new NotFoundException("No user: " + username));
         if (properties.isAdmin(username)) {
-            throw new IllegalArgumentException("Admin accounts cannot be suspended");
+            throw new IllegalArgumentException("Configured admin accounts cannot be suspended");
+        }
+        user.setSuspended(request.suspended());
+        users.save(user);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Role select ("user" | "admin"); configured admins are pinned — config is authoritative for them. */
+    @PutMapping("/api/admin/users/{username}/role")
+    ResponseEntity<Void> setRole(@PathVariable String username, @RequestBody RoleRequest request) {
+        if (!"user".equals(request.role()) && !"admin".equals(request.role())) {
+            throw new IllegalArgumentException("Role must be 'user' or 'admin'");
+        }
+        if (properties.isAdmin(username)) {
+            throw new IllegalArgumentException("Configured admin accounts cannot be changed from the API");
         }
         UserEntity user = users.findByUsername(username)
                 .orElseThrow(() -> new NotFoundException("No user: " + username));
-        user.setSuspended(request.suspended());
+        user.setRole(request.role());
         users.save(user);
         return ResponseEntity.noContent().build();
     }

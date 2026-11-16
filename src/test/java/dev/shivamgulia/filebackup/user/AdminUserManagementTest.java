@@ -143,4 +143,46 @@ class AdminUserManagementTest {
         assertThat(adminPut("/api/admin/users/admin/suspension", token,
                 Map.of("suspended", true)).getStatusCode().value()).isEqualTo(400);
     }
+
+    @Test
+    void roleGrantAndRevokeTakesEffectImmediately() {
+        String token = adminToken();
+        String name = "roleuser-" + System.nanoTime();
+        adminPost("/api/admin/users", token, Map.of("username", name, "password", "password123"));
+
+        // a fresh user is a plain user — no admin access
+        String userToken = login(name, "password123");
+        assertThat(rest.exchange("/api/admin/users", HttpMethod.GET,
+                new HttpEntity<>(bearer(userToken)), String.class).getStatusCode().value()).isEqualTo(403);
+
+        // invalid role value rejected
+        assertThat(adminPut("/api/admin/users/" + name + "/role", token,
+                Map.of("role", "superadmin")).getStatusCode().value()).isEqualTo(400);
+        // configured admins are pinned
+        assertThat(adminPut("/api/admin/users/admin/role", token,
+                Map.of("role", "user")).getStatusCode().value()).isEqualTo(400);
+
+        // grant admin → live token gets admin rights immediately
+        assertThat(adminPut("/api/admin/users/" + name + "/role", token,
+                Map.of("role", "admin")).getStatusCode().value()).isEqualTo(204);
+        assertThat(rest.exchange("/api/admin/users", HttpMethod.GET,
+                new HttpEntity<>(bearer(userToken)), String.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(rest.exchange("/api/files?prefix=admin/", HttpMethod.GET,
+                new HttpEntity<>(bearer(userToken)), String.class).getStatusCode().value()).isEqualTo(200);
+
+        // revoke → same live token loses admin rights immediately
+        assertThat(adminPut("/api/admin/users/" + name + "/role", token,
+                Map.of("role", "user")).getStatusCode().value()).isEqualTo(204);
+        assertThat(rest.exchange("/api/admin/users", HttpMethod.GET,
+                new HttpEntity<>(bearer(userToken)), String.class).getStatusCode().value()).isEqualTo(403);
+        // admin files no longer visible (outside-namespace prefixes look empty, never leak)
+        ResponseEntity<String> afterRevoke = rest.exchange("/api/files?prefix=admin/", HttpMethod.GET,
+                new HttpEntity<>(bearer(userToken)), String.class);
+        assertThat(afterRevoke.getStatusCode().value()).isEqualTo(200);
+        assertThat(afterRevoke.getBody()).isEqualTo("[]");
+
+        // unknown user → 404
+        assertThat(adminPut("/api/admin/users/ghost-" + name + "/role", token,
+                Map.of("role", "admin")).getStatusCode().value()).isEqualTo(404);
+    }
 }

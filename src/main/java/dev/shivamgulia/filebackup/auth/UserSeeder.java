@@ -10,7 +10,9 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 
 /**
- * Seeds users from config on boot — existing users are never touched.
+ * Seeds users from config on boot. New users are created; existing users are only updated
+ * where config is authoritative: usernames listed in {@code filebackup.admin-user} are
+ * forced to the {@code admin} role (role management for everyone else lives in the admin API).
  */
 @Component
 public class UserSeeder implements ApplicationRunner {
@@ -27,9 +29,13 @@ public class UserSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         for (AuthProperties.SeedUser seed : new ArrayList<>(properties.users())) {
-            if (users.findByUsername(seed.username()).isEmpty()) {
-                users.save(new UserEntity(seed.username(), encoder.encode(seed.password())));
-            }
+            users.findByUsername(seed.username()).ifPresentOrElse(existing -> {
+                if (properties.isAdmin(seed.username()) && !"admin".equals(existing.getRole())) {
+                    existing.setRole("admin");
+                    users.save(existing);
+                }
+            }, () -> users.save(new UserEntity(seed.username(), encoder.encode(seed.password()),
+                    properties.isAdmin(seed.username()) ? "admin" : "user")));
         }
     }
 }

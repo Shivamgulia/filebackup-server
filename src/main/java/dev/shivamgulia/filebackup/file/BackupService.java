@@ -31,16 +31,25 @@ public class BackupService {
 
     private final FileStorage storage;
     private final MetadataStore metadata;
+    private final dev.shivamgulia.filebackup.user.UserRepository users;
     private final int keepVersions;
     private final AuthProperties auth;
 
     public BackupService(FileStorage storage, MetadataStore metadata,
+                         dev.shivamgulia.filebackup.user.UserRepository users,
                          @Value("${filebackup.keep-versions:10}") int keepVersions,
                          AuthProperties auth) {
         this.storage = storage;
         this.metadata = metadata;
+        this.users = users;
         this.keepVersions = keepVersions;
         this.auth = auth;
+    }
+
+    /** Admin = configured in filebackup.admin-user OR granted the admin role in the DB. */
+    private boolean isAdmin(String username) {
+        return auth.isAdmin(username)
+                || users.findByUsername(username).map(u -> "admin".equals(u.getRole())).orElse(false);
     }
 
     public VersionRecord upload(String path, String username, InputStream body) {
@@ -74,7 +83,8 @@ public class BackupService {
 
     public List<FileSummary> list(String prefix, String username) {
         String p = effectivePrefix(prefix, username);
-        return metadata.list(p);
+        // p == null only for a non-admin prefixing outside their namespace → empty, never everything
+        return p == null ? List.of() : metadata.list(p);
     }
 
     public void delete(String path, String username) {
@@ -86,7 +96,7 @@ public class BackupService {
 
     /** Non-admins are pinned to their own username prefix; anything outside it looks empty (no leaking). */
     private String effectivePrefix(String prefix, String username) {
-        if (auth.isAdmin(username)) {
+        if (isAdmin(username)) {
             return (prefix == null || prefix.isBlank()) ? "" : prefix;
         }
         String own = username + "/";
@@ -98,7 +108,7 @@ public class BackupService {
 
     /** Cross-user access is a 404, not a 403 — don't confirm other users' paths exist. Admin bypasses. */
     private void requireOwner(String path, String username) {
-        if (!username.equals(ownerOf(path)) && !auth.isAdmin(username)) {
+        if (!username.equals(ownerOf(path)) && !isAdmin(username)) {
             throw new NotFoundException("No backup for path: " + path);
         }
     }
