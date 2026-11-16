@@ -34,6 +34,10 @@ public class UserEntity {
     @Column(name = "password_hash", nullable = false, columnDefinition = "text")
     private String passwordHash;
 
+    /** Suspended users fail login and their existing tokens are rejected at the filter. */
+    @Column(nullable = false)
+    private boolean suspended = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

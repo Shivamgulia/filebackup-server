@@ -1,5 +1,6 @@
 package dev.shivamgulia.filebackup.config;
 
+import dev.shivamgulia.filebackup.user.AdminUserController;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -42,6 +43,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(UploadConflictException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     ErrorResponse uploadConflict(UploadConflictException ex) {
+        return new ErrorResponse(409, ex.getMessage(), null);
+    }
+
+    @ExceptionHandler(AdminUserController.DuplicateUserException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    ErrorResponse duplicateUser(AdminUserController.DuplicateUserException ex) {
         return new ErrorResponse(409, ex.getMessage(), null);
     }
 

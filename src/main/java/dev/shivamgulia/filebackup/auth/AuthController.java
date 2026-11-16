@@ -20,6 +20,9 @@ public class AuthController {
     public record LoginResponse(String token) {
     }
 
+    public record LoginRejected(int status, String message) {
+    }
+
     private record ErrorBody(int status, String message) {
     }
 
@@ -39,7 +42,13 @@ public class AuthController {
         }
         return users.findByUsername(request.username())
                 .filter(u -> encoder.matches(request.password(), u.getPasswordHash()))
-                .map(u -> ResponseEntity.ok((Object) new LoginResponse(jwt.issue(u.getUsername()))))
+                .map(u -> {
+                    if (u.isSuspended()) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body((Object) new LoginRejected(403, "Account suspended"));
+                    }
+                    return ResponseEntity.ok((Object) new LoginResponse(jwt.issue(u.getUsername())));
+                })
                 .orElseGet(this::unauthorized);
     }
 

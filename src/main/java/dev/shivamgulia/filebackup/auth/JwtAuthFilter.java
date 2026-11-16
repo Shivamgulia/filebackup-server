@@ -4,6 +4,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import dev.shivamgulia.filebackup.user.UserRepository;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,10 +26,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwt;
     private final String adminUser;
+    private final UserRepository users;
 
-    public JwtAuthFilter(JwtService jwt, String adminUser) {
+    public JwtAuthFilter(JwtService jwt, String adminUser, UserRepository users) {
         this.jwt = jwt;
         this.adminUser = adminUser;
+        this.users = users;
     }
 
     @Override
@@ -36,12 +39,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
-            jwt.parse(header.substring(7)).ifPresent(username -> {
-                var authorities = List.of(new SimpleGrantedAuthority(
-                        username.equals(adminUser) ? ROLE_ADMIN : "ROLE_USER"));
-                var authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-            });
+            jwt.parse(header.substring(7)).ifPresent(username ->
+                    // user must still exist and not be suspended — suspension kills live tokens too
+                    users.findByUsername(username)
+                            .filter(u -> !u.isSuspended())
+                            .ifPresent(u -> {
+                                var authorities = List.of(new SimpleGrantedAuthority(
+                                        username.equals(adminUser) ? ROLE_ADMIN : "ROLE_USER"));
+                                var authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
+                                SecurityContextHolder.getContext().setAuthentication(authentication);
+                            }));
         }
         try {
             chain.doFilter(request, response);
