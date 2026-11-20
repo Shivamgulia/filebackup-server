@@ -1,14 +1,18 @@
 package dev.shivamgulia.filebackup.file;
 
 import dev.shivamgulia.filebackup.config.NotFoundException;
-import dev.shivamgulia.filebackup.auth.AuthProperties;
 import dev.shivamgulia.filebackup.config.UploadConflictException;
 import dev.shivamgulia.filebackup.metadata.FileSummary;
 import dev.shivamgulia.filebackup.metadata.MetadataStore;
 import dev.shivamgulia.filebackup.metadata.VersionRecord;
+import dev.shivamgulia.filebackup.share.ShareEntity;
+import dev.shivamgulia.filebackup.share.ShareRepository;
 import dev.shivamgulia.filebackup.storage.FileStorage;
+import dev.shivamgulia.filebackup.auth.AuthProperties;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -19,7 +23,9 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Orchestrates the backup flows. Talks only to the {@link FileStorage} and {@link MetadataStore} ports.
@@ -31,16 +37,19 @@ public class BackupService {
 
     private final FileStorage storage;
     private final MetadataStore metadata;
+    private final ShareRepository shareRepository;
     private final dev.shivamgulia.filebackup.user.UserRepository users;
     private final int keepVersions;
     private final AuthProperties auth;
 
     public BackupService(FileStorage storage, MetadataStore metadata,
+                         ShareRepository shareRepository,
                          dev.shivamgulia.filebackup.user.UserRepository users,
                          @Value("${filebackup.keep-versions:10}") int keepVersions,
                          AuthProperties auth) {
         this.storage = storage;
         this.metadata = metadata;
+        this.shareRepository = shareRepository;
         this.users = users;
         this.keepVersions = keepVersions;
         this.auth = auth;
@@ -61,9 +70,28 @@ public class BackupService {
     }
 
     /** Opens {@code path} at {@code version} (latest when null). Caller must stream + checksum-verify. */
+    @Transactional
     public Download download(String path, Long version, String username) {
         requirePath(path);
-        requireOwner(path, username);
+
+        // Check share access: if the user is not the owner, check if they have an active share
+        if (!username.equals(ownerOf(path))) {
+            // User is not the owner - check share access
+            var activeShare = shareRepository.findByTargetUsernameAndRevokedFalseAndExpiresAtIsNull(username)
+                    .stream()
+                    .filter(share -> share.getResourcePath().equals(path))
+                    .findFirst();
+
+            if (activeShare.isEmpty()) {
+                // No share access - check if admin
+                if (!isAdmin(username)) {
+                    throw new NotFoundException("No backup for path: " + path);
+                }
+                // Admin bypass
+            }
+            // User has share access - continue
+        }
+
         VersionRecord record = (version == null ? metadata.latestVersion(path) : metadata.version(path, version))
                 .orElseThrow(() -> new NotFoundException("No version " + (version == null ? "latest" : version) + " for path: " + path));
         if (version != null && metadata.latestVersion(path).map(v -> v.version()).filter(v -> v.equals(version)).isEmpty()) {
@@ -185,7 +213,7 @@ public class BackupService {
         return saved;
     }
 
-    private static void requireSha256(String sha256) {
+    static void requireSha256(String sha256) {
         if (sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
             throw new IllegalArgumentException("sha256 must be a 64-char lowercase hex string");
         }
