@@ -87,8 +87,9 @@ public class ShareController {
             @ApiResponse(responseCode = "404", description = "Share not found")
     })
     @DeleteMapping("/{shareId}")
-    public ResponseEntity<Void> revokeShare(@PathVariable @Parameter(description = "The share ID to revoke", required = true) String shareId) {
-        boolean revoked = shareService.revokeShare(shareId);
+    public ResponseEntity<Void> revokeShare(Authentication authentication,
+                                           @PathVariable @Parameter(description = "The share ID to revoke", required = true) String shareId) {
+        boolean revoked = shareService.revokeShare(shareId, authentication.getName());
         if (!revoked) {
             return ResponseEntity.notFound().build();
         }

@@ -5,8 +5,6 @@ import dev.shivamgulia.filebackup.config.UploadConflictException;
 import dev.shivamgulia.filebackup.metadata.FileSummary;
 import dev.shivamgulia.filebackup.metadata.MetadataStore;
 import dev.shivamgulia.filebackup.metadata.VersionRecord;
-import dev.shivamgulia.filebackup.share.ShareEntity;
-import dev.shivamgulia.filebackup.share.ShareRepository;
 import dev.shivamgulia.filebackup.storage.FileStorage;
 import dev.shivamgulia.filebackup.auth.AuthProperties;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,19 +35,19 @@ public class BackupService {
 
     private final FileStorage storage;
     private final MetadataStore metadata;
-    private final ShareRepository shareRepository;
+    private final dev.shivamgulia.filebackup.share.service.ShareService shares;
     private final dev.shivamgulia.filebackup.user.UserRepository users;
     private final int keepVersions;
     private final AuthProperties auth;
 
     public BackupService(FileStorage storage, MetadataStore metadata,
-                         ShareRepository shareRepository,
+                         dev.shivamgulia.filebackup.share.service.ShareService shares,
                          dev.shivamgulia.filebackup.user.UserRepository users,
                          @Value("${filebackup.keep-versions:10}") int keepVersions,
                          AuthProperties auth) {
         this.storage = storage;
         this.metadata = metadata;
-        this.shareRepository = shareRepository;
+        this.shares = shares;
         this.users = users;
         this.keepVersions = keepVersions;
         this.auth = auth;
@@ -73,24 +71,7 @@ public class BackupService {
     @Transactional
     public Download download(String path, Long version, String username) {
         requirePath(path);
-
-        // Check share access: if the user is not the owner, check if they have an active share
-        if (!username.equals(ownerOf(path))) {
-            // User is not the owner - check share access
-            var activeShare = shareRepository.findByTargetUsernameAndRevokedFalseAndExpiresAtIsNull(username)
-                    .stream()
-                    .filter(share -> share.getResourcePath().equals(path))
-                    .findFirst();
-
-            if (activeShare.isEmpty()) {
-                // No share access - check if admin
-                if (!isAdmin(username)) {
-                    throw new NotFoundException("No backup for path: " + path);
-                }
-                // Admin bypass
-            }
-            // User has share access - continue
-        }
+        requireReadAccess(path, username);
 
         VersionRecord record = (version == null ? metadata.latestVersion(path) : metadata.version(path, version))
                 .orElseThrow(() -> new NotFoundException("No version " + (version == null ? "latest" : version) + " for path: " + path));
@@ -104,7 +85,7 @@ public class BackupService {
     /** Latest-version metadata without opening the file (cheap check for clients, used by HEAD + client script). */
     public VersionRecord latest(String path, String username) {
         requirePath(path);
-        requireOwner(path, username);
+        requireReadAccess(path, username);
         return metadata.latestVersion(path)
                 .orElseThrow(() -> new NotFoundException("No backup for path: " + path));
     }
@@ -137,6 +118,13 @@ public class BackupService {
     /** Cross-user access is a 404, not a 403 — don't confirm other users' paths exist. Admin bypasses. */
     private void requireOwner(String path, String username) {
         if (!username.equals(ownerOf(path)) && !isAdmin(username)) {
+            throw new NotFoundException("No backup for path: " + path);
+        }
+    }
+
+    /** Read = owner, admin, or an active share for this exact path. Writes stay owner-only. */
+    private void requireReadAccess(String path, String username) {
+        if (!username.equals(ownerOf(path)) && !isAdmin(username) && !shares.hasShareAccess(path, username)) {
             throw new NotFoundException("No backup for path: " + path);
         }
     }

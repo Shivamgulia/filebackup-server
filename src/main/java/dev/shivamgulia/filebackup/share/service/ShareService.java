@@ -1,8 +1,5 @@
 package dev.shivamgulia.filebackup.share.service;
 
-import dev.shivamgulia.filebackup.auth.AuthProperties;
-import dev.shivamgulia.filebackup.file.FileEntity;
-import dev.shivamgulia.filebackup.file.FileRepository;
 import dev.shivamgulia.filebackup.share.ShareEntity;
 import dev.shivamgulia.filebackup.share.ShareRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,8 +18,6 @@ import java.util.UUID;
 public class ShareService {
 
     private final ShareRepository shareRepository;
-    private final FileRepository fileRepository;
-    private final AuthProperties authProperties;
 
     /**
      * Create a new share for a resource path.
@@ -60,7 +55,7 @@ public class ShareService {
         }
 
         // Check if a share already exists for this owner/target/path combination
-        var existing = shareRepository.findByOwnerUsernameAndTargetUsernameAndResourcePathAndRevokedFalseAndExpiresAtIsNull(
+        var existing = shareRepository.findFirstByOwnerUsernameAndTargetUsernameAndResourcePathAndRevokedFalse(
                 ownerUsername, targetUsername, resourcePath);
         if (existing.isPresent()) {
             // Update existing share rather than creating a duplicate
@@ -91,7 +86,7 @@ public class ShareService {
      * @return list of active shares
      */
     public List<ShareEntity> listActiveSharesByOwner(String ownerUsername) {
-        return shareRepository.findByOwnerUsernameAndRevokedFalseAndExpiresAtIsNull(ownerUsername);
+        return active(shareRepository.findByOwnerUsernameAndRevokedFalse(ownerUsername));
     }
 
     /**
@@ -101,65 +96,43 @@ public class ShareService {
      * @return list of active shares targeting this user
      */
     public List<ShareEntity> listActiveSharesByTarget(String targetUsername) {
-        return shareRepository.findByTargetUsernameAndRevokedFalseAndExpiresAtIsNull(targetUsername);
+        return active(shareRepository.findByTargetUsernameAndRevokedFalse(targetUsername));
     }
 
     /**
      * Revoke a share by its ID.
      *
      * @param shareId the share ID to revoke
-     * @return true if the share was revoked, false if not found
+     * @param ownerUsername the caller, who must be the share owner
+     * @return true if the share was revoked, false if not found or not owned by the caller
      */
     @Transactional
-    public boolean revokeShare(String shareId) {
-        var optional = shareRepository.findById(shareId);
-        if (optional.isPresent()) {
-            var share = optional.get();
-            share.setRevoked(true);
-            shareRepository.save(share);
-            return true;
-        }
-        return false;
+    public boolean revokeShare(String shareId, String ownerUsername) {
+        return shareRepository.findById(shareId)
+                .filter(share -> share.getOwnerUsername().equals(ownerUsername))
+                .map(share -> {
+                    share.setRevoked(true);
+                    shareRepository.save(share);
+                    return true;
+                })
+                .orElse(false);
     }
 
     /**
-     * Check if a user has access to a specific resource path.
-     * Access is granted if:
-     * 1. The user is the owner of the path, OR
-     * 2. The user has an active (non-revoked, non-expired) share for this path
-     *
-     * @param path the resource path being accessed
-     * @param username the username of the requesting user
-     * @return true if access is granted, false otherwise
+     * True when {@code username} holds an active share for exactly this path.
+     * Owners are handled by the caller; this only answers the share question.
      */
     public boolean hasShareAccess(String path, String username) {
-        // First, check if the user is the owner (existing behavior)
-        String ownerOfPath = path.split("/")[0];
-        if (ownerOfPath.equals(username)) {
-            return true;
-        }
-
-        // Check if the user has an active share for this path
-        var shares = shareRepository.findByTargetUsernameAndRevokedFalseAndExpiresAtIsNull(username);
-        return shares.stream()
-                .filter(s -> s.getResourcePath().equals(path))
-                .noneMatch(s -> s.getExpiresAt() != null && s.getExpiresAt().isBefore(Instant.now()));
+        return active(shareRepository.findByTargetUsernameAndRevokedFalse(username)).stream()
+                .anyMatch(share -> share.getResourcePath().equals(path));
     }
 
-    /**
-     * Check if a share exists and is active for the given path and target user.
-     *
-     * @param path the resource path
-     * @param targetUsername the username of the potential recipient
-     * @return the active share, or null if not found/expired/revoked
-     */
-    public ShareEntity findActiveShareForPath(String path, String targetUsername) {
-        return shareRepository.findByTargetUsernameAndRevokedFalseAndExpiresAtIsNull(targetUsername)
-                .stream()
-                .filter(s -> s.getResourcePath().equals(path))
-                .filter(s -> s.getExpiresAt() == null || !s.getExpiresAt().isBefore(Instant.now()))
-                .findFirst()
-                .orElse(null);
+    /** Drops expired rows in Java because the DB query cannot express "null or future". */
+    private List<ShareEntity> active(List<ShareEntity> shares) {
+        Instant now = Instant.now();
+        return shares.stream()
+                .filter(s -> s.getExpiresAt() == null || s.getExpiresAt().isAfter(now))
+                .toList();
     }
 
     /**
